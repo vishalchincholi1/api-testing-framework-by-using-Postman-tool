@@ -1,0 +1,367 @@
+/**
+ * Performance Monitoring Utilities for Postman API Testing
+ * 
+ * This module provides comprehensive performance monitoring capabilities
+ * including response time tracking, throughput analysis, and performance
+ * threshold validation for API automation testing.
+ * 
+ * @author API Automation Framework
+ * @version 1.0.0
+ */
+
+class PerformanceMonitor {
+    constructor() {
+        this.thresholds = {
+            responseTime: {
+                excellent: 100,
+                good: 200,
+                acceptable: 500,
+                poor: 1000
+            },
+            throughput: {
+                minimum: 10, // requests per second
+                target: 50,
+                maximum: 100
+            }
+        };
+    }
+
+    /**
+     * Basic performance test with configurable thresholds
+     * @param {number} maxResponseTime - Maximum acceptable response time in ms
+     * @param {string} testName - Custom test name
+     */
+    validateResponseTime(maxResponseTime = 200, testName = "Response time validation") {
+        pm.test(testName, () => {
+            const responseTime = pm.response.responseTime;
+            pm.expect(responseTime).to.be.below(maxResponseTime);
+            
+            // Log performance category
+            const category = this.getPerformanceCategory(responseTime);
+            console.log(`Performance Category: ${category} (${responseTime}ms)`);
+        });
+    }
+
+    /**
+     * Categorize response time performance
+     * @param {number} responseTime - Response time in milliseconds
+     * @returns {string} Performance category
+     */
+    getPerformanceCategory(responseTime) {
+        if (responseTime <= this.thresholds.responseTime.excellent) return "Excellent";
+        if (responseTime <= this.thresholds.responseTime.good) return "Good";
+        if (responseTime <= this.thresholds.responseTime.acceptable) return "Acceptable";
+        if (responseTime <= this.thresholds.responseTime.poor) return "Poor";
+        return "Critical";
+    }
+
+    /**
+     * Collect detailed performance metrics
+     * @param {Object} customMetrics - Additional custom metrics to track
+     */
+    collectMetrics(customMetrics = {}) {
+        const metrics = {
+            timestamp: new Date().toISOString(),
+            endpoint: pm.request.url.toString(),
+            method: pm.request.method,
+            responseTime: pm.response.responseTime,
+            status: pm.response.status,
+            size: pm.response.size(),
+            headers: pm.response.headers.count(),
+            category: this.getPerformanceCategory(pm.response.responseTime),
+            ...customMetrics
+        };
+
+        // Store metrics in environment
+        let performanceMetrics = JSON.parse(
+            pm.environment.get("performanceMetrics") || "[]"
+        );
+        
+        performanceMetrics.push(metrics);
+        
+        // Keep only last 1000 entries to prevent memory issues
+        if (performanceMetrics.length > 1000) {
+            performanceMetrics = performanceMetrics.slice(-1000);
+        }
+        
+        pm.environment.set("performanceMetrics", JSON.stringify(performanceMetrics));
+        
+        return metrics;
+    }
+
+    /**
+     * Generate performance summary report
+     */
+    generateSummaryReport() {
+        const metrics = JSON.parse(
+            pm.environment.get("performanceMetrics") || "[]"
+        );
+
+        if (metrics.length === 0) {
+            console.log("No performance metrics available");
+            return;
+        }
+
+        const summary = this.calculateSummaryStats(metrics);
+        
+        console.log("=== PERFORMANCE SUMMARY REPORT ===");
+        console.log(`Total Requests: ${summary.totalRequests}`);
+        console.log(`Average Response Time: ${summary.avgResponseTime}ms`);
+        console.log(`Min Response Time: ${summary.minResponseTime}ms`);
+        console.log(`Max Response Time: ${summary.maxResponseTime}ms`);
+        console.log(`95th Percentile: ${summary.p95ResponseTime}ms`);
+        console.log(`Success Rate: ${summary.successRate}%`);
+        console.log(`Performance Distribution:`);
+        console.log(`  - Excellent: ${summary.distribution.excellent}%`);
+        console.log(`  - Good: ${summary.distribution.good}%`);
+        console.log(`  - Acceptable: ${summary.distribution.acceptable}%`);
+        console.log(`  - Poor: ${summary.distribution.poor}%`);
+        console.log(`  - Critical: ${summary.distribution.critical}%`);
+        
+        return summary;
+    }
+
+    /**
+     * Calculate summary statistics from metrics
+     * @param {Array} metrics - Array of performance metrics
+     * @returns {Object} Summary statistics
+     */
+    calculateSummaryStats(metrics) {
+        const responseTimes = metrics.map(m => m.responseTime);
+        const successfulRequests = metrics.filter(m => m.status >= 200 && m.status < 400);
+        
+        // Calculate percentiles
+        const sortedTimes = responseTimes.sort((a, b) => a - b);
+        const p95Index = Math.floor(sortedTimes.length * 0.95);
+        
+        // Calculate distribution
+        const distribution = {
+            excellent: 0,
+            good: 0,
+            acceptable: 0,
+            poor: 0,
+            critical: 0
+        };
+        
+        metrics.forEach(metric => {
+            const category = metric.category.toLowerCase();
+            if (distribution.hasOwnProperty(category)) {
+                distribution[category]++;
+            }
+        });
+        
+        // Convert to percentages
+        Object.keys(distribution).forEach(key => {
+            distribution[key] = Math.round((distribution[key] / metrics.length) * 100);
+        });
+
+        return {
+            totalRequests: metrics.length,
+            avgResponseTime: Math.round(responseTimes.reduce((a, b) => a + b, 0) / responseTimes.length),
+            minResponseTime: Math.min(...responseTimes),
+            maxResponseTime: Math.max(...responseTimes),
+            p95ResponseTime: sortedTimes[p95Index] || 0,
+            successRate: Math.round((successfulRequests.length / metrics.length) * 100),
+            distribution
+        };
+    }
+
+    /**
+     * Monitor API endpoint performance over time
+     * @param {string} endpointName - Name identifier for the endpoint
+     */
+    monitorEndpointPerformance(endpointName) {
+        const currentTime = new Date().toISOString();
+        const responseTime = pm.response.responseTime;
+        
+        // Get existing endpoint metrics
+        let endpointMetrics = JSON.parse(
+            pm.environment.get(`endpoint_${endpointName}_metrics`) || "[]"
+        );
+        
+        endpointMetrics.push({
+            timestamp: currentTime,
+            responseTime: responseTime,
+            status: pm.response.status
+        });
+        
+        // Keep last 100 measurements per endpoint
+        if (endpointMetrics.length > 100) {
+            endpointMetrics = endpointMetrics.slice(-100);
+        }
+        
+        pm.environment.set(`endpoint_${endpointName}_metrics`, JSON.stringify(endpointMetrics));
+        
+        // Calculate trend
+        if (endpointMetrics.length >= 5) {
+            const trend = this.calculateTrend(endpointMetrics);
+            console.log(`${endpointName} Performance Trend: ${trend}`);
+        }
+    }
+
+    /**
+     * Calculate performance trend
+     * @param {Array} metrics - Array of endpoint metrics
+     * @returns {string} Trend description
+     */
+    calculateTrend(metrics) {
+        const recentMetrics = metrics.slice(-5);
+        const olderMetrics = metrics.slice(-10, -5);
+        
+        if (olderMetrics.length === 0) return "Insufficient data";
+        
+        const recentAvg = recentMetrics.reduce((sum, m) => sum + m.responseTime, 0) / recentMetrics.length;
+        const olderAvg = olderMetrics.reduce((sum, m) => sum + m.responseTime, 0) / olderMetrics.length;
+        
+        const percentChange = ((recentAvg - olderAvg) / olderAvg) * 100;
+        
+        if (percentChange > 10) return "Degrading";
+        if (percentChange < -10) return "Improving";
+        return "Stable";
+    }
+
+    /**
+     * Set custom performance thresholds
+     * @param {Object} customThresholds - Custom threshold configuration
+     */
+    setThresholds(customThresholds) {
+        this.thresholds = { ...this.thresholds, ...customThresholds };
+    }
+
+    /**
+     * Validate multiple performance criteria
+     * @param {Object} criteria - Performance criteria to validate
+     */
+    validatePerformanceCriteria(criteria = {}) {
+        const defaultCriteria = {
+            maxResponseTime: 200,
+            minThroughput: null,
+            maxErrorRate: 5,
+            requiredHeaders: []
+        };
+        
+        const config = { ...defaultCriteria, ...criteria };
+        
+        // Response time validation
+        if (config.maxResponseTime) {
+            pm.test(`Response time under ${config.maxResponseTime}ms`, () => {
+                pm.expect(pm.response.responseTime).to.be.below(config.maxResponseTime);
+            });
+        }
+        
+        // Header validation for performance
+        if (config.requiredHeaders.length > 0) {
+            pm.test("Performance-related headers present", () => {
+                config.requiredHeaders.forEach(header => {
+                    pm.response.to.have.header(header);
+                });
+            });
+        }
+        
+        // Collect metrics with validation results
+        this.collectMetrics({
+            validationPassed: pm.response.responseTime < config.maxResponseTime,
+            criteria: config
+        });
+    }
+
+    /**
+     * Load testing simulation helper
+     * @param {Object} loadConfig - Load testing configuration
+     */
+    simulateLoad(loadConfig = {}) {
+        const config = {
+            duration: 60, // seconds
+            rampUp: 10,   // seconds
+            maxUsers: 10,
+            ...loadConfig
+        };
+        
+        console.log(`Simulating load test: ${config.maxUsers} users over ${config.duration}s`);
+        
+        // Store load test configuration
+        pm.environment.set("loadTestConfig", JSON.stringify(config));
+        
+        // Track load test metrics
+        const loadMetrics = {
+            startTime: new Date().toISOString(),
+            config: config,
+            responseTime: pm.response.responseTime,
+            status: pm.response.status
+        };
+        
+        let loadTestResults = JSON.parse(
+            pm.environment.get("loadTestResults") || "[]"
+        );
+        
+        loadTestResults.push(loadMetrics);
+        pm.environment.set("loadTestResults", JSON.stringify(loadTestResults));
+    }
+
+    /**
+     * Memory and resource usage monitoring
+     */
+    monitorResourceUsage() {
+        const resourceMetrics = {
+            timestamp: new Date().toISOString(),
+            responseSize: pm.response.size(),
+            headerCount: pm.response.headers.count(),
+            responseTime: pm.response.responseTime,
+            endpoint: pm.request.url.toString()
+        };
+        
+        // Check for potential memory issues
+        if (resourceMetrics.responseSize > 1024 * 1024) { // 1MB
+            console.warn(`Large response detected: ${Math.round(resourceMetrics.responseSize / 1024)}KB`);
+        }
+        
+        if (resourceMetrics.headerCount > 20) {
+            console.warn(`High header count: ${resourceMetrics.headerCount} headers`);
+        }
+        
+        return resourceMetrics;
+    }
+
+    /**
+     * Clear all performance metrics
+     */
+    clearMetrics() {
+        pm.environment.unset("performanceMetrics");
+        pm.environment.unset("loadTestResults");
+        console.log("Performance metrics cleared");
+    }
+}
+
+// Export for use in Postman scripts
+if (typeof module !== 'undefined' && module.exports) {
+    module.exports = PerformanceMonitor;
+}
+
+// Global instance for immediate use
+const performanceMonitor = new PerformanceMonitor();
+
+// Example usage patterns for Postman scripts:
+
+/*
+// Basic usage in test script:
+performanceMonitor.validateResponseTime(200, "API response time check");
+performanceMonitor.collectMetrics({ userId: "test123" });
+
+// Advanced usage:
+performanceMonitor.validatePerformanceCriteria({
+    maxResponseTime: 150,
+    requiredHeaders: ["Cache-Control", "ETag"]
+});
+
+// Endpoint monitoring:
+performanceMonitor.monitorEndpointPerformance("user-login");
+
+// Generate report (use in final test or collection):
+performanceMonitor.generateSummaryReport();
+
+// Load testing:
+performanceMonitor.simulateLoad({
+    duration: 120,
+    maxUsers: 50
+});
+*/
